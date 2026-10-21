@@ -1,113 +1,49 @@
 name: Release
 
+# Taqt fork: builds the PHP 8.2 ARM images and publishes them to ghcr.io
+# The release tag is the PHP version (e.g. 8.2.34), it is also the tag of the published images
+
 on:
     # This workflow can be manually triggered
     workflow_dispatch:
-    # But the main use case is to release new layers when a release is created
+        inputs:
+            version:
+                description: 'Tag of the published images (PHP version, e.g. 8.2.34)'
+                required: true
+    # But the main use case is to release new images when a release is created
     release:
         types: [ published ]
 
-# Necessary to deploy to AWS using OIDC
-# https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services
 permissions:
-    id-token: write # This is required for requesting the JWT
     contents: read  # This is required for actions/checkout
+    packages: write # This is required to push to ghcr.io
 
 jobs:
 
     release:
-        name: Publish ${{ matrix.cpu }} layers
-        runs-on: ubuntu-24.04
+        name: Publish arm images
+        runs-on: ubuntu-24.04-arm
         timeout-minutes: 60
-        strategy:
-            matrix:
-                cpu:
-                    - x86
-                    - arm
+        env:
+            CPU: arm
         steps:
             -   uses: actions/checkout@v6
 
             -   name: Get the version
                 id: get_version
-                run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_OUTPUT
+                run: echo "VERSION=${{ github.event.release.tag_name || inputs.version }}" >> $GITHUB_OUTPUT
 
-            # See https://stackoverflow.com/questions/70312490/github-actions-runner-environment-doesnt-build-for-arm-images
-            -   name: Set up QEMU to run ARM images (that were built with Depot)
-                uses: docker/setup-qemu-action@v4
-
-            -   uses: depot/setup-action@v1
-
-            -   name: Configure AWS credentials
-                uses: aws-actions/configure-aws-credentials@v6
-                with:
-                    role-to-assume: arn:aws:iam::534081306603:role/bref-layer-publisher-github-actions
-                    role-session-name: bref-layer-publisher-github-actions
-                    aws-region: us-east-1
-
-            -   name: Configure Docker Hub credentials
+            -   name: Configure ghcr.io credentials
                 uses: docker/login-action@v4
                 with:
-                    username: ${{ secrets.DOCKER_USERNAME }}
-                    password: ${{ secrets.DOCKER_PASSWORD }}
+                    registry: ghcr.io
+                    username: ${{ github.actor }}
+                    password: ${{ secrets.GITHUB_TOKEN }}
 
-            -   run: make docker-images
-                env:
-                    CPU: ${{ matrix.cpu }}
-                    USE_DEPOT: 1
-                    DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
+            -   run: make docker-images-php-82
 
-            -   run: make layers
-                env:
-                    CPU: ${{ matrix.cpu }}
+            -   run: make test-82
 
-            -   run: make test
+            -   run: make upload-to-ghcr-php-82
                 env:
-                    CPU: ${{ matrix.cpu }}
-
-            -   run: make upload-layers
-                env:
-                    CPU: ${{ matrix.cpu }}
-
-            -   run: make upload-to-docker-hub
-                env:
-                    CPU: ${{ matrix.cpu }}
                     DOCKER_TAG: ${{ steps.get_version.outputs.VERSION }}
-
-    update-layer-versions:
-        name: Update layer versions in brefphp/bref
-        runs-on: ubuntu-24.04
-        needs: [ release ]
-        steps:
-            -   name: Trigger layer update in brefphp/bref
-                uses: actions/github-script@v9
-                with:
-                    github-token: ${{ secrets.GH_TOKEN_TRIGGER }}
-                    script: |
-                        await github.rest.actions.createWorkflowDispatch({
-                            owner: 'brefphp',
-                            repo: 'bref',
-                            workflow_id: 'update-layer-versions.yml',
-                            ref: '2.x',
-                            inputs: {
-                                release_url: '${{ github.event.release.url }}',
-                                release_html_url: '${{ github.event.release.html_url }}',
-                                release_name: '${{ github.event.release.name }}'
-                            }
-                        })
-
-    update-layer-js-versions:
-        name: Update layer versions in brefphp/layers.js
-        runs-on: ubuntu-24.04
-        needs: [ release ]
-        steps:
-            -   name: Trigger release in brefphp/layers.js
-                uses: actions/github-script@v9
-                with:
-                    github-token: ${{ secrets.GH_TOKEN_TRIGGER }}
-                    script: |
-                        await github.rest.actions.createWorkflowDispatch({
-                          owner: 'brefphp',
-                          repo: 'layers.js',
-                          workflow_id: 'release.yml',
-                          ref: '2.x'
-                        })

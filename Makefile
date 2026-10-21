@@ -88,6 +88,24 @@ upload-to-docker-hub-php-%:
 	done
 
 
+# Publish the Docker images to the GitHub Container Registry of the Taqt fork.
+# Same tags as upload-to-docker-hub: "2" follows the latest release, DOCKER_TAG pins it.
+GHCR_REGISTRY ?= ghcr.io/agoraopinion
+upload-to-ghcr-php-%:
+	(test $(DOCKER_TAG)) && echo "Tagging images with \"${DOCKER_TAG}\"" || echo "You have to define environment variable DOCKER_TAG"
+	test $(DOCKER_TAG)
+
+	set -e ; \
+	for image in \
+	  "${CPU_PREFIX}php-$*" "${CPU_PREFIX}php-$*-fpm" "${CPU_PREFIX}php-$*-console" \
+	  "${CPU_PREFIX}build-php-$*" "${CPU_PREFIX}php-$*-fpm-dev"; \
+	do \
+		docker tag bref/$$image ${GHCR_REGISTRY}/$$image:2 ; \
+		docker tag bref/$$image ${GHCR_REGISTRY}/$$image:${DOCKER_TAG} ; \
+		docker push ${GHCR_REGISTRY}/$$image:2 ; \
+		docker push ${GHCR_REGISTRY}/$$image:${DOCKER_TAG} ; \
+	done
+
 test: test-80 test-81 test-82 test-83 test-84
 test-%:
 	cd tests && $(MAKE) test-$*
